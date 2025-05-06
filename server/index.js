@@ -1,94 +1,93 @@
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws"; 
-import words from "./words.js";
+import questions from "./questions.js"; 
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });  
-
-const OPEN = 1; 
-
+const wss = new WebSocketServer({ server });
 
 const PORT = 3000;
-
 let players = [];
-let currentWord = "";
-let host = null;
+let currentQuestion = "";  // Inisialisasi variabel
+let currentAnswer = "";    // Inisialisasi variabel
 
+// Pilih pertanyaan secara acak
+function chooseQuestion() {
+  const random = questions[Math.floor(Math.random() * questions.length)];
+  currentQuestion = random.question;  
+  currentAnswer = random.answer;
+  console.log("Soal baru:", currentQuestion);
+}
+
+// Kirim pesan ke semua client
 function broadcast(data, except = null) {
-  const msg = JSON.stringify(data);
   players.forEach((player) => {
-    if (player !== except && player.readyState === OPEN) {
-      player.send(msg);
+    if (player !== except && player.readyState === 1) { 
+      player.send(JSON.stringify(data));
     }
   });
 }
 
-function chooseWord() {
-  if (!Array.isArray(words) || words.length === 0) {
-    console.error("Words list is empty or invalid.");
-    currentWord = "";
-    return;
-  }
-  const randomIndex = Math.floor(Math.random() * words.length);
-  currentWord = words[randomIndex];
-  console.log("Selected word:", currentWord);
-}
-
 wss.on("connection", (ws) => {
-  console.log("A player connected.");
+  console.log("Pemain baru terhubung.");
   players.push(ws);
 
-  // Assign host if none exists
-  if (!host) {
-    host = ws;
-    chooseWord();
-    ws.send(JSON.stringify({ type: "host", word: currentWord }));
-  } else {
-    ws.send(JSON.stringify({ type: "player" }));
-  }
+  // Pilih pertanyaan baru dan kirim ke semua pemain
+  chooseQuestion();
 
+  // Kirim pertanyaan kepada semua pemain yang terhubung
+  ws.send(JSON.stringify({
+    type: "question",
+    question: currentQuestion
+  }));
+
+  // Handle pesan dari client
   ws.on("message", (message) => {
-    let data;
-    try {
-      data = JSON.parse(message);
-    } catch (err) {
-      console.error("Invalid message format:", message);
-      return;
-    }
+    const data = JSON.parse(message);
 
     if (data.type === "guess") {
-      const guess = (data.guess || "").toLowerCase();
-      const correct = guess === currentWord.toLowerCase();
+      const correct = data.guess.toLowerCase().trim() === currentAnswer.toLowerCase().trim();
 
       if (correct) {
-        broadcast({ type: "win", guess: data.guess, player: data.name });
-        chooseWord();
+        broadcast({
+          type: "win",
+          guess: data.guess,
+          player: data.name
+        });
 
-        if (host && host.readyState === OPEN) {
-          host.send(JSON.stringify({ type: "host", word: currentWord }));
-        }
+        // Ambil pertanyaan baru & kirim ke semua
+        chooseQuestion();
+        broadcast({
+          type: "question",
+          question: currentQuestion
+        });
       } else {
-        broadcast({ type: "guess", guess: data.guess, player: data.name }, ws);
+        broadcast({
+          type: "guess",
+          guess: data.guess,
+          player: data.name
+        });
       }
     }
   });
 
   ws.on("close", () => {
-    console.log("A player disconnected.");
+    console.log("Pemain terputus.");
     players = players.filter((p) => p !== ws);
 
-    if (ws === host) {
-      host = players[0] || null;
-      if (host && host.readyState === OPEN) {
-        chooseWord();
-        host.send(JSON.stringify({ type: "host", word: currentWord }));
-      }
+    // Kirim pertanyaan baru ke semua pemain jika ada pemain yang tersisa
+    if (players.length > 0) {
+      chooseQuestion();
+      broadcast({
+        type: "question",
+        question: currentQuestion
+      });
     }
   });
 });
 
+// Jalankan server
 server.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`WebSocket server berjalan di http://localhost:${PORT}`);
 });
